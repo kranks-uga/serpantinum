@@ -178,8 +178,8 @@ Variants {
 
                 property bool isNiri: false
                 property bool isSway: false
-                property int niriActiveIndex: 0
-                property var niriOccupiedMap: ({})
+                readonly property int niriActiveIndex: NiriState.activeIndex
+                readonly property var niriOccupiedMap: NiriState.occupiedMap
                 property int swayActiveIndex: 0
                 property var swayOccupiedMap: ({})
 
@@ -235,88 +235,6 @@ Variants {
 
                 onEffectiveAutohideChanged: hideTimer.stop()
                 onActiveIndexChanged: hideTimer.stop()
-
-                Timer {
-                    id: niriDebounceTimer
-                    interval: 50
-                    repeat: false
-                    onTriggered: {
-                        if (dockWindow.isNiri) {
-                            niriPoller.running = false;
-                            niriPoller.running = true;
-                        }
-                    }
-                }
-
-                Timer {
-                    id: niriRestartTimer
-                    interval: 1000
-                    repeat: false
-                    onTriggered: {
-                        if (dockWindow.isNiri) {
-                            niriEventStream.running = false;
-                            niriEventStream.running = true;
-                        }
-                    }
-                }
-
-                Process {
-                    id: niriEventStream
-                    running: false
-                    command: ["niri", "msg", "--json", "event-stream"]
-                    stdout: SplitParser {
-                        splitMarker: "\n"
-                        onRead: data => {
-                            if (data.trim().length > 0) {
-                                niriDebounceTimer.restart();
-                            }
-                        }
-                    }
-                    onExited: {
-                        if (dockWindow.isNiri) {
-                            niriRestartTimer.restart();
-                        }
-                    }
-                }
-
-                Process {
-                    id: niriPoller
-                    running: false
-                    command: [
-                        "bash",
-                        "-c",
-                        "workspaces=$(niri msg -j workspaces 2>/dev/null || echo '[]'); windows=$(niri msg -j windows 2>/dev/null || echo '[]'); echo \"{\\\"workspaces\\\": $workspaces, \\\"windows\\\": $windows}\""
-                    ]
-                    stdout: StdioCollector {
-                        onStreamFinished: {
-                            try {
-                                let data = JSON.parse(this.text);
-                                let wsList = data.workspaces || [];
-                                let winList = data.windows || [];
-                                let occ = {};
-                                for (let i = 0; i < winList.length; i++) {
-                                    let win = winList[i];
-                                    if (win.workspace_id !== undefined && win.workspace_id !== null) {
-                                        occ[win.workspace_id] = true;
-                                    }
-                                }
-                                let activeIdx = 0;
-                                for (let j = 0; j < wsList.length; j++) {
-                                    let w = wsList[j];
-                                    let idx = (w.idx !== undefined ? w.idx : (w.id !== undefined ? w.id : 1)) - 1;
-                                    if (w.is_focused || w.is_active) {
-                                        activeIdx = idx;
-                                    }
-                                    if (w.active_window_id !== null || occ[w.id] || occ[w.idx]) {
-                                        occ[idx] = true;
-                                    }
-                                }
-                                dockWindow.niriActiveIndex = activeIdx;
-                                dockWindow.niriOccupiedMap = occ;
-                            } catch (e) {}
-                        }
-                    }
-                }
 
                 Process {
                     id: swayPoller
@@ -814,8 +732,7 @@ Variants {
                     dockWindow.isNiri = de.indexOf("niri") !== -1;
                     dockWindow.isSway = de.indexOf("sway") !== -1;
                     if (dockWindow.isNiri) {
-                        niriPoller.running = true;
-                        niriEventStream.running = true;
+                        NiriState.subscribe();
                     }
                     if (dockWindow.isSway) {
                         swayPoller.running = true;
@@ -823,6 +740,10 @@ Variants {
                     loadApps();
                     loadAllDesktopApps();
                     initTimer.start();
+                }
+
+                Component.onDestruction: {
+                    if (dockWindow.isNiri) NiriState.unsubscribe();
                 }
 
                 onConfigRevisionChanged: loadApps()
